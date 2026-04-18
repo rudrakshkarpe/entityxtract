@@ -27,7 +27,10 @@ Built as an **open-source alternative** to Google Cloud Document AI, Azure AI Do
 * 📊 **Observability** — Structured logs, token usage tracking, and optional cost tracking.
 * 📦 **PyPI Package** — Easily install and use entityxtract in your projects.
 
-### Coming Soon
+<details>
+<summary><b>▶ Coming Soon — click to expand upcoming features</b></summary>
+
+<br>
 
 * 🌐 **FastAPI REST API** for remote extraction services.
 * 🖥️ **Web UI** for visual entity/schema management and job monitoring.
@@ -36,7 +39,14 @@ Built as an **open-source alternative** to Google Cloud Document AI, Azure AI Do
 * 👁️ **Deepseek OCR** integration for enhanced document processing.
 * 🔌 **MCP server** for agentic applications.
 
+</details>
+
 ## Installation
+
+<details>
+<summary><b>▶ Click to expand — install with uv (recommended)</b></summary>
+
+<br>
 
 To use entityxtract, you'll need Python 3.12+ and [uv](https://docs.astral.sh/uv/) (recommended):
 
@@ -52,7 +62,14 @@ cd entityxtract
 uv sync
 ```
 
+</details>
+
 ## Getting Started
+
+<details open>
+<summary><b>▼ Click to collapse — extract pre-defined entities in 4 steps</b></summary>
+
+<br>
 
 Extract pre-defined entities:
 
@@ -98,7 +115,14 @@ for name, result in results.results.items():
         print(f"Failed: {result.message}")
 ```
 
+</details>
+
 ## Configuration
+
+<details>
+<summary><b>▶ Click to expand — environment variables for any OpenAI-compatible endpoint</b></summary>
+
+<br>
 
 Copy the sample environment file `.env.sample` to `.env`, or set the following environment variables directly:
 
@@ -111,7 +135,14 @@ export OPENAI_API_BASE="https://openrouter.ai/api/v1"
 export OPENAI_DEFAULT_MODEL="google/gemini-2.5-flash"
 ```
 
+</details>
+
 ## Usage Examples
+
+<details>
+<summary><b>▶ Click to expand — multi-entity extraction, cost tracking, and input modes</b></summary>
+
+<br>
 
 ### Complete Example with Multiple Entities
 
@@ -207,7 +238,181 @@ config = ExtractionConfig(
 
 See `tests/test.py` for more complete examples.
 
+</details>
+
+## Durable & Agentic Extraction (Temporal)
+
+entityxtract ships with an optional **[Temporal](https://temporal.io/)** integration that makes extraction jobs crash-proof, resumable, and agentic. Built on [Pydantic AI](https://ai.pydantic.dev/) and Temporal, it wraps the same extraction logic in durable workflows so worker crashes, rate limits, and transient errors don't force you to re-pay for tokens.
+
+<details>
+<summary><b>▶ Click to expand — full Temporal setup, usage, architecture, and UI walkthrough</b></summary>
+
+### What you get
+
+- **Crash-proof** — if the worker dies mid-extraction, restarting it resumes where it left off. Completed LLM calls are not re-paid.
+- **Automatic retries** — Temporal's retry policies replace manual backoff loops; rate limits and transient failures are handled per-activity.
+- **Agentic coordinator** — a Pydantic AI agent (`TemporalAgent`) orchestrates extraction, validates results, and self-corrects with refined prompts.
+- **Human-in-the-loop** — signal-based approval/rejection of extracted entities, with a 24-hour auto-approval timeout.
+- **Progress queries** — query a running workflow for real-time progress and partial results.
+- **Full observability** — every LLM call and tool invocation is recorded in Temporal's event history (see screenshots below).
+
+### Prerequisites
+
+1. **Install Temporal CLI**:
+
+   ```bash
+   brew install temporal        # macOS
+   # or see https://docs.temporal.io/cli for other platforms
+   ```
+
+2. **Configure `entityxtract/.env`** with an OpenAI-compatible endpoint:
+
+   ```bash
+   OPENAI_API_KEY="sk-or-v1-..."
+   OPENAI_API_BASE="https://openrouter.ai/api/v1"
+   OPENAI_DEFAULT_MODEL="google/gemini-2.5-flash"
+   ```
+
+   Any OpenAI-compatible endpoint works (OpenAI, OpenRouter, Ollama, Together, Groq, LM Studio, etc.).
+
+### Quick start
+
+```bash
+# Terminal A — Temporal dev server (UI at http://localhost:8233)
+temporal server start-dev
+
+# Terminal B — entityxtract worker
+python -m entityxtract.durable.worker
+# Expect:
+#   Coordinator model: openai:google/gemini-2.5-flash
+#   Coordinator activities: ['event_stream_handler_activity', 'request_activity', ...]
+#   Worker listening on task queue 'entityxtract'...
+
+# Terminal C — run an end-to-end smoke test against the included PDF
+python scripts/smoke_test_durable.py
+```
+
+### Programmatic usage
+
+```python
+import asyncio
+import json
+from entityxtract.durable import (
+    DocumentRef, EntitySpec, ExtractionJobRequest, run_extraction_job,
+)
+from entityxtract.extractor_types import ExtractionConfig, FileInputMode
+
+request = ExtractionJobRequest(
+    doc_ref=DocumentRef(uri="file:///path/to/report.pdf", doc_type="pdf"),
+    entities=[
+        EntitySpec(
+            name="Authors",
+            kind="table",
+            example_schema=json.dumps([{"Name": "Example", "Org": "Example Inc"}]),
+            instructions="Extract all authors with Name and Organization.",
+        ),
+    ],
+    config=ExtractionConfig(
+        model_name="google/gemini-2.5-flash",
+        file_input_modes=[FileInputMode.FILE],
+    ),
+)
+
+results = asyncio.run(run_extraction_job(request, workflow_id="my-report"))
+print(results)
+```
+
+### Architecture
+
+```
+Client  ──start workflow──>  Temporal Server  <──schedule/persist──>  Worker
+                                                                       │
+                                                     ┌─────────────────┤
+                                                     │ Workflow         │
+                                                     │ (deterministic)  │
+                                                     │                  │
+                                                     ▼                  ▼
+                                              TemporalAgent      Activities
+                                              (coordinator)     load_document
+                                                   │            render_pages
+                                                   ▼            extract_entity
+                                              Model Activity    validate
+                                              (LLM call)
+```
+
+The workflow stays deterministic (just orchestration). Every non-deterministic operation — LLM calls, PDF parsing, file I/O, tool invocations — lives in a Temporal activity with its own retry policy, timeout, and durability guarantees.
+
+### Temporal UI walkthrough
+
+After running the smoke test, open **http://localhost:8233** and click the completed workflow run. You'll see something like:
+
+<p align="center">
+  <img alt="Completed entityxtract workflow in the Temporal UI" src="docs/assets/temporal/workflow-dashboard.png" width="100%"/>
+</p>
+
+The **top panel** shows workflow metadata (status, start/end times, task queue, history size, SDK version). The **Input** box is the serialized `ExtractionJobRequest`; the **Result** box is the extracted entities returned to the client.
+
+Zooming into the **Event History** timeline gives you the per-activity durability view:
+
+<p align="center">
+  <img alt="Event history timeline showing per-activity durability" src="docs/assets/temporal/event-history.png" width="100%"/>
+</p>
+
+Each bar is a Temporal activity. Reading left-to-right:
+
+- `load_document_activity` — loads the PDF (runs once, no retries needed).
+- `agent_entityxtract_coordinator_model_request` (the long green bars) — one LLM call each. These are the auto-generated activities from `TemporalAgent`.
+- `agent_entityxtract_coordinator_toolset_<agent>_call_tool` — each tool invocation the coordinator decides to make (`extract_entity`, `validate_extraction`).
+
+If the worker had crashed at any point, Temporal would have replayed history up to the last completed activity and resumed — none of the completed bars would run again.
+
+### Signals & Queries
+
+| Type   | Name                  | Description                                    |
+|--------|-----------------------|------------------------------------------------|
+| Signal | `approve_entity`      | Approve an extracted entity (optionally edit)  |
+| Signal | `reject_entity`       | Reject an entity with a reason                 |
+| Query  | `get_progress`        | Get current `JobProgress` snapshot             |
+| Query  | `get_partial_results` | Get completed extraction results so far        |
+
+Send signals / run queries from the Temporal UI, the `temporal` CLI, or programmatically via `entityxtract.durable.client`.
+
+### File layout
+
+```
+src/entityxtract/durable/
+  __init__.py       # Public API (lazy imports)
+  types.py          # DocumentRef, EntitySpec, Deps, JobProgress, etc.
+  agent.py          # Pydantic AI Agent + TemporalAgent factory
+  tools.py          # Agent tool functions (extract, validate, detect, approve)
+  activities.py     # Infrastructure activities (load, render, extract, validate)
+  workflow.py       # EntityExtractionWorkflow with signals + queries
+  worker.py         # python -m entityxtract.durable.worker
+  client.py         # run_extraction_job() and other client helpers
+
+examples/temporal_extraction.py    # End-to-end PDF extraction example
+scripts/smoke_test_durable.py      # Quick smoke test (uses tests/data PDF)
+tests/test_durable.py              # Sandbox validation + type roundtrip tests
+```
+
+### Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| Worker crashes with `RestrictedWorkflowAccessError` | A new transitive import needs adding to `passthrough_modules` in `worker.py`. |
+| `OpenAIError: api_key must be set` on the worker | Forgot `OPENAI_API_KEY` in `.env`, or worker terminal doesn't see it. |
+| Smoke test hangs forever | Worker isn't running, or listening on a different task queue (default: `entityxtract`). |
+| `Activity function agent__...__model_request is not registered` | The coordinator wasn't attached via `__pydantic_ai_agents__`. Check `worker.py` logs for `Coordinator activities: [...]`. |
+| Workflow completes but expected entity is missing | Model chose not to call `extract_entity`; raise log level or try a stronger model. |
+
+</details>
+
 ## Roadmap
+
+<details>
+<summary><b>▶ Click to expand — planned interfaces, DX, providers, and testing work</b></summary>
+
+<br>
 
 ### Interfaces
 - 🌐 FastAPI REST API for remote extraction services
@@ -231,7 +436,14 @@ See `tests/test.py` for more complete examples.
 - 📊 Benchmark suite for accuracy and performance
 - 📚 Comprehensive documentation site
 
+</details>
+
 ## Comparisons
+
+<details>
+<summary><b>▶ Click to expand — how entityxtract compares to commercial alternatives</b></summary>
+
+<br>
 
 entityxtract positions itself as a flexible, open-source alternative to both commercial services and closed-source solutions:
 
@@ -241,7 +453,14 @@ entityxtract positions itself as a flexible, open-source alternative to both com
 - **Schema + Examples**: Strong emphasis on structured entity definitions with few-shot learning
 - **Complete Stack**: Python SDK today, REST API and Web UI coming soon
 
+</details>
+
 ## Contributing
+
+<details>
+<summary><b>▶ Click to expand — dev setup, test commands, and contribution guidelines</b></summary>
+
+<br>
 
 We welcome contributions! entityxtract uses modern Python tooling:
 
@@ -264,6 +483,8 @@ uv run ruff format .
 - Use structured logging patterns
 
 Open an issue or PR with a clear description and we'll be happy to review!
+
+</details>
 
 ## Get Help and Support
 
